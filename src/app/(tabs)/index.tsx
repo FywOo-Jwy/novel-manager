@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { View, FlatList, StyleSheet } from 'react-native';
+import { View, FlatList, StyleSheet, TextInput, Pressable } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
-import { useFocusEffect, router } from 'expo-router';
-import { Searchbar, Chip, FAB, Badge, IconButton, Text } from 'react-native-paper';
+import { useFocusEffect, router, useLocalSearchParams } from 'expo-router';
+import { Chip, FAB, Badge, IconButton, Text } from 'react-native-paper';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { theme } from '@/theme/theme';
 import { BookCard } from '@/components/BookCard';
@@ -10,13 +10,13 @@ import { EmptyState } from '@/components/EmptyState';
 import { FilterSheet } from '@/components/FilterSheet';
 import { listBooks, getDistinctAuthors, getDistinctPublishers } from '@/db/books';
 import { listTags } from '@/db/tags';
-import type { Book, Filters, SortKey, SortState, TagWithGroup } from '@/types/models';
+import type { Book, Filters, SortKey, SortState, TagWithGroup, ReadingMethod, ReadingStatus } from '@/types/models';
 import { EMPTY_FILTERS } from '@/types/models';
 
 const SORT_OPTIONS: { key: SortKey; label: string; defaultDir: SortState['direction'] }[] = [
   { key: 'updated_at', label: '最近修改', defaultDir: 'desc' },
   { key: 'rating', label: '评分', defaultDir: 'desc' },
-  { key: 'total_volumes', label: '最新卷', defaultDir: 'desc' },
+  { key: 'latest_publish_date', label: '最新出版', defaultDir: 'desc' },
 ];
 
 function filterCount(f: Filters): number {
@@ -43,6 +43,36 @@ export default function ShelfScreen() {
   const [allTags, setAllTags] = useState<TagWithGroup[]>([]);
   const [authors, setAuthors] = useState<string[]>([]);
   const [publishers, setPublishers] = useState<string[]>([]);
+
+  // 详情页「资讯」点击后带过来的快捷筛选（stamp 保证每次点击都会生效）
+  const params = useLocalSearchParams<{
+    author?: string;
+    publisher?: string;
+    method?: string;
+    tagId?: string;
+    status?: string;
+    stamp?: string;
+  }>();
+
+  useEffect(() => {
+    const stamp = params.stamp;
+    if (!stamp) return;
+    const one = (v?: string | string[]) => (Array.isArray(v) ? v[0] : v);
+    const author = one(params.author);
+    const publisher = one(params.publisher);
+    const method = one(params.method);
+    const tagId = one(params.tagId);
+    const status = one(params.status);
+    setFilters({
+      ...EMPTY_FILTERS,
+      authors: author ? [author] : [],
+      publishers: publisher ? [publisher] : [],
+      readingMethods: method ? [method as ReadingMethod] : [],
+      readingStatuses: status ? [status as ReadingStatus] : [],
+      includeTagIds: tagId ? [Number(tagId)] : [],
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.stamp]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -87,13 +117,24 @@ export default function ShelfScreen() {
 
   return (
     <View style={styles.container}>
-      <Searchbar
-        placeholder="搜索书名、作者、标签…"
-        value={search}
-        onChangeText={setSearch}
-        style={styles.search}
-        clearIcon="close"
-      />
+      <View style={styles.search}>
+        <MaterialCommunityIcons name="magnify" size={20} color={theme.colors.onSurfaceVariant} />
+        <TextInput
+          value={search}
+          onChangeText={setSearch}
+          placeholder="搜索书名、作者、标签…"
+          placeholderTextColor={theme.colors.onSurfaceVariant}
+          style={styles.searchInput}
+          returnKeyType="search"
+          selectionColor={theme.colors.primary}
+          underlineColorAndroid="transparent"
+        />
+        {search ? (
+          <Pressable onPress={() => setSearch('')} hitSlop={8}>
+            <MaterialCommunityIcons name="close-circle" size={18} color={theme.colors.onSurfaceVariant} />
+          </Pressable>
+        ) : null}
+      </View>
 
       <View style={styles.sortRow}>
         <View style={styles.sortScroll}>
@@ -177,12 +218,22 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.background,
   },
   search: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginHorizontal: 16,
     marginTop: 8,
     marginBottom: 6,
+    height: 46,
+    paddingHorizontal: 14,
     borderRadius: 999,
     backgroundColor: theme.colors.surfaceVariant,
-    height: 46,
+  },
+  searchInput: {
+    flex: 1,
+    marginLeft: 8,
+    paddingVertical: 0,
+    fontSize: 14,
+    color: theme.colors.onSurface,
   },
   sortRow: {
     flexDirection: 'row',

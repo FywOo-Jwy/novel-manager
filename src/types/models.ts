@@ -25,6 +25,8 @@ export interface Book {
   rating: number | null;
   review: string | null;
   cover_path: string | null;
+  /** 最新一卷的出版日期（ISO YYYY-MM-DD）。 */
+  latest_publish_date: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -48,6 +50,12 @@ export interface Tag {
   id: number;
   name: string;
   group_id: number | null;
+}
+
+/** 文库清单条目（不分组的标签式管理）。 */
+export interface Publisher {
+  id: number;
+  name: string;
 }
 
 export interface TagWithGroup extends Tag {
@@ -78,7 +86,7 @@ export interface DashboardStats {
   lastFinished: Book | null;
 }
 
-export type SortKey = 'updated_at' | 'rating' | 'title_cn' | 'author' | 'total_volumes';
+export type SortKey = 'updated_at' | 'rating' | 'title_cn' | 'author' | 'total_volumes' | 'latest_publish_date';
 export type SortDirection = 'asc' | 'desc';
 
 export interface SortState {

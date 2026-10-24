@@ -46,15 +46,21 @@ function InfoRow({
   label,
   values,
   colorIndex,
+  onPress,
 }: {
   label: string;
   values: string[];
   colorIndex: number;
+  onPress?: () => void;
 }) {
   if (!values.length) return null;
   const color = INFO_LABEL_COLORS[colorIndex % INFO_LABEL_COLORS.length];
   return (
-    <View style={styles.chipRow}>
+    <Pressable
+      onPress={onPress}
+      disabled={!onPress}
+      style={({ pressed }) => [styles.chipRow, pressed && onPress ? styles.chipRowPressed : null]}
+    >
       <View style={[styles.labelChip, { backgroundColor: color + '22' }]}>
         <Text style={[styles.labelChipText, { color }]}>{label}</Text>
       </View>
@@ -64,8 +70,16 @@ function InfoRow({
             <Text style={styles.valuePillText}>{v}</Text>
           </View>
         ))}
+        {onPress ? (
+          <MaterialCommunityIcons
+            name="chevron-right"
+            size={16}
+            color={theme.colors.onSurfaceVariant}
+            style={styles.rowChevron}
+          />
+        ) : null}
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -188,6 +202,17 @@ export default function BookDetailScreen() {
     router.back();
   };
 
+  /** 跳到书架并带上对应的快捷筛选。 */
+  const goFilter = (p: {
+    author?: string;
+    publisher?: string;
+    method?: string;
+    tagId?: string;
+    status?: string;
+  }) => {
+    router.push({ pathname: '/', params: { ...p, stamp: String(Date.now()) } });
+  };
+
   if (!book) return <View style={styles.container} />;
 
   const infoValues = (v: string | number | null | undefined) =>
@@ -258,6 +283,69 @@ export default function BookDetailScreen() {
           <PillButton icon="format-list-numbered" label="选择分卷" onPress={onPickVolume} variant="secondary" />
         </View>
 
+        {/* 资讯（标签优先；可点的条目会跳到书架对应筛选） */}
+        <Text style={styles.sectionTitle}>资讯</Text>
+        <View style={styles.infoSection}>
+          {book.tags.length ? (
+            <View style={styles.chipRow}>
+              <View style={[styles.labelChip, { backgroundColor: INFO_LABEL_COLORS[0] + '22' }]}>
+                <Text style={[styles.labelChipText, { color: INFO_LABEL_COLORS[0] }]}>标签</Text>
+              </View>
+              <View style={styles.valueWrap}>
+                {book.tags.map((t) => (
+                  <Pressable key={t.id} onPress={() => goFilter({ tagId: String(t.id) })}>
+                    <TagChip label={t.name} color={t.group_color ?? undefined} />
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ) : null}
+          <InfoRow
+            label="作者"
+            values={infoValues(book.author)}
+            colorIndex={1}
+            onPress={book.author ? () => goFilter({ author: book.author as string }) : undefined}
+          />
+          <InfoRow label="插画" values={infoValues(book.illustrator)} colorIndex={2} />
+          <InfoRow
+            label="文库"
+            values={infoValues(book.publisher)}
+            colorIndex={3}
+            onPress={book.publisher ? () => goFilter({ publisher: book.publisher as string }) : undefined}
+          />
+          <InfoRow
+            label="最新出版"
+            values={book.latest_publish_date ? [displayDate(book.latest_publish_date)] : []}
+            colorIndex={4}
+          />
+          <InfoRow
+            label="卷数"
+            values={book.total_volumes != null ? [`共 ${trimNumber(book.total_volumes)} 卷`] : []}
+            colorIndex={5}
+          />
+          <InfoRow
+            label="方式"
+            values={infoValues(book.reading_method)}
+            colorIndex={6}
+            onPress={book.reading_method ? () => goFilter({ method: book.reading_method as string }) : undefined}
+          />
+          <InfoRow
+            label="购入"
+            values={book.cost != null ? [formatMoney(book.cost)] : []}
+            colorIndex={7}
+          />
+          <InfoRow
+            label="回血"
+            values={book.recovered != null ? [formatMoney(book.recovered)] : []}
+            colorIndex={0}
+          />
+          <InfoRow
+            label="评分"
+            values={book.rating != null ? [`${book.rating} / 10`] : []}
+            colorIndex={1}
+          />
+        </View>
+
         {/* 上次阅读 chip */}
         {lastLog ? (
           <View style={styles.lastReadChip}>
@@ -273,50 +361,6 @@ export default function BookDetailScreen() {
         ) : null}
 
         <Divider style={styles.divider} />
-
-        {/* 资讯 */}
-        <Text style={styles.sectionTitle}>资讯</Text>
-        <View style={styles.infoSection}>
-          <InfoRow label="作者" values={infoValues(book.author)} colorIndex={0} />
-          <InfoRow label="插画" values={infoValues(book.illustrator)} colorIndex={1} />
-          <InfoRow label="文库" values={infoValues(book.publisher)} colorIndex={2} />
-          <InfoRow
-            label="卷数"
-            values={book.total_volumes != null ? [`共 ${trimNumber(book.total_volumes)} 卷`] : []}
-            colorIndex={3}
-          />
-          {book.reading_volume != null ? (
-            <InfoRow label="在读" values={[`第 ${trimNumber(book.reading_volume)} 卷`]} colorIndex={3} />
-          ) : null}
-          <InfoRow label="方式" values={infoValues(book.reading_method)} colorIndex={4} />
-          <InfoRow
-            label="购入"
-            values={book.cost != null ? [formatMoney(book.cost)] : []}
-            colorIndex={5}
-          />
-          <InfoRow
-            label="回血"
-            values={book.recovered != null ? [formatMoney(book.recovered)] : []}
-            colorIndex={6}
-          />
-          <InfoRow
-            label="评分"
-            values={book.rating != null ? [`${book.rating} / 10`] : []}
-            colorIndex={7}
-          />
-          {book.tags.length ? (
-            <View style={styles.chipRow}>
-              <View style={[styles.labelChip, { backgroundColor: INFO_LABEL_COLORS[0] + '22' }]}>
-                <Text style={[styles.labelChipText, { color: INFO_LABEL_COLORS[0] }]}>标签</Text>
-              </View>
-              <View style={styles.valueWrap}>
-                {book.tags.map((t) => (
-                  <TagChip key={t.id} label={t.name} color={t.group_color ?? undefined} />
-                ))}
-              </View>
-            </View>
-          ) : null}
-        </View>
 
         {/* 阅读记录 */}
         {logs.length ? (
@@ -594,14 +638,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     marginBottom: 10,
+    borderRadius: 12,
+  },
+  chipRowPressed: {
+    opacity: 0.6,
+  },
+  rowChevron: {
+    marginLeft: -2,
+    marginBottom: 6,
   },
   labelChip: {
+    width: 72,
     borderRadius: 999,
-    paddingHorizontal: 12,
     paddingVertical: 5,
     marginRight: 10,
-    minWidth: 56,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   labelChipText: {
     fontSize: 12.5,

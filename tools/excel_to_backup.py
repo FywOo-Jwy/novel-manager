@@ -13,7 +13,7 @@ Excel 书单 → App 备份 zip 转换工具
   E 画师       → books.illustrator
   F 文库       → books.publisher
   G 卷数       → books.total_volumes（去前导零，支持小数）
-  H 最后出版日期 → 忽略
+  H 最后出版日期 → books.latest_publish_date（ISO，用于「最新出版」排序）
   I 类型       → 标签（按空格拆分，自动生成 tags + book_tags，group_id=1 默认分组）
   J 情况       → books.reading_status + books.reading_volume
   K 方式       → books.reading_method
@@ -31,7 +31,7 @@ import json
 import re
 import sys
 import zipfile
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import openpyxl
 
@@ -47,7 +47,7 @@ COL_AUTHOR = 3      # D
 COL_ILLUSTRATOR = 4 # E
 COL_PUBLISHER = 5   # F
 COL_TOTAL_VOL = 6   # G
-COL_LAST_PUB = 7    # H（忽略）
+COL_LAST_PUB = 7    # H → books.latest_publish_date
 COL_TYPE = 8        # I
 COL_STATUS = 9      # J
 COL_METHOD = 10     # K
@@ -88,6 +88,28 @@ def parse_money(v):
         return None
     try:
         return float(s)
+    except ValueError:
+        return None
+
+
+def parse_pub_date(v):
+    """H 列「最后出版日期」 → ISO YYYY-MM-DD；空/无法识别 → None。"""
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.date().isoformat()
+    if isinstance(v, date):
+        return v.isoformat()
+    s = str(v).strip()
+    if s in ('', '/', '-', '—', '未知'):
+        return None
+    m = re.search(r'(\d{4})\D+(\d{1,2})(?:\D+(\d{1,2}))?', s)
+    if not m:
+        return None
+    year, month = int(m.group(1)), int(m.group(2))
+    day = int(m.group(3)) if m.group(3) else 1
+    try:
+        return date(year, month, day).isoformat()
     except ValueError:
         return None
 
@@ -215,6 +237,7 @@ def convert(xlsx_path):
             'illustrator': cell(r[COL_ILLUSTRATOR]) or None,
             'publisher': cell(r[COL_PUBLISHER]) or None,
             'total_volumes': total_vol,
+            'latest_publish_date': parse_pub_date(r[COL_LAST_PUB]),
             'reading_status': status,
             'publication_status': None,
             'reading_volume': volume,
@@ -252,6 +275,14 @@ def convert(xlsx_path):
         for name, tid in sorted(tag_index.items(), key=lambda kv: kv[1])
     ]
 
+    # 文库清单（与 App 内 publishers 表同构，去重保序）
+    pub_names = []
+    for b in books:
+        name = b['publisher']
+        if name and name not in pub_names:
+            pub_names.append(name)
+    publishers = [{'id': i + 1, 'name': n} for i, n in enumerate(pub_names)]
+
     manifest = {
         'app': APP_KEY,
         'version': BACKUP_VERSION,
@@ -263,6 +294,7 @@ def convert(xlsx_path):
             'tags': tags,
             'book_tags': book_tags,
             'epub_files': [],
+            'publishers': publishers,
         },
         'files': [],
     }

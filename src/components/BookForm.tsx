@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { View, ScrollView, StyleSheet } from 'react-native';
+import { View, ScrollView, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
 import {
   TextInput,
   Text,
@@ -19,6 +19,7 @@ import { CoverThumb } from '@/components/CoverThumb';
 import { TagChip } from '@/components/TagChip';
 import { getBookWithTags, createBook, updateBook, setBookTags, type BookDraft } from '@/db/books';
 import { listTagGroups, listTags, createTag, createTagGroup, findTagByName } from '@/db/tags';
+import { listPublishers, ensurePublisher } from '@/db/publishers';
 import { listReadingLogs, replaceReadingLogs, type ReadingLogDraft } from '@/db/readingLogs';
 import { parseOptionalNumber } from '@/utils/format';
 import { COVER_DIR, importFileToStorage, deleteRelFile } from '@/utils/files';
@@ -31,6 +32,7 @@ import {
   type ReadingMethod,
   type TagGroup,
   type TagWithGroup,
+  type Publisher,
   type ReadingLog,
 } from '@/types/models';
 
@@ -98,7 +100,7 @@ export function BookForm({ bookId }: { bookId?: number }) {
   const [illustrator, setIllustrator] = useState('');
   const [publisher, setPublisher] = useState('');
   const [totalVolumes, setTotalVolumes] = useState('');
-  const [readingVolume, setReadingVolume] = useState('');
+  const [latestPublish, setLatestPublish] = useState('');
   const [cost, setCost] = useState('');
   const [recovered, setRecovered] = useState('');
   const [review, setReview] = useState('');
@@ -115,7 +117,12 @@ export function BookForm({ bookId }: { bookId?: number }) {
   const [allTags, setAllTags] = useState<TagWithGroup[]>([]);
   const [groups, setGroups] = useState<TagGroup[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<number[]>([]);
+  const [expandedGroups, setExpandedGroups] = useState<number[]>([]);
   const [newTagName, setNewTagName] = useState('');
+
+  // publishers (文库)
+  const [publishers, setPublishers] = useState<Publisher[]>([]);
+  const [newPublisherName, setNewPublisherName] = useState('');
   const [groupDialogVisible, setGroupDialogVisible] = useState(false);
   const [pendingTagName, setPendingTagName] = useState('');
   const [newGroupMode, setNewGroupMode] = useState(false);
@@ -129,9 +136,10 @@ export function BookForm({ bookId }: { bookId?: number }) {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [tags, gs] = await Promise.all([listTags(db), listTagGroups(db)]);
+    const [tags, gs, ps] = await Promise.all([listTags(db), listTagGroups(db), listPublishers(db)]);
     setAllTags(tags);
     setGroups(gs);
+    setPublishers(ps);
 
     if (bookId != null) {
       const b = await getBookWithTags(db, bookId);
@@ -142,7 +150,7 @@ export function BookForm({ bookId }: { bookId?: number }) {
         setIllustrator(b.illustrator ?? '');
         setPublisher(b.publisher ?? '');
         setTotalVolumes(b.total_volumes != null ? String(b.total_volumes) : '');
-        setReadingVolume(b.reading_volume != null ? String(b.reading_volume) : '');
+        setLatestPublish(b.latest_publish_date ?? '');
         setCost(b.cost != null ? String(b.cost) : '');
         setRecovered(b.recovered != null ? String(b.recovered) : '');
         setReview(b.review ?? '');
@@ -187,6 +195,19 @@ export function BookForm({ bookId }: { bookId?: number }) {
 
   const toggleTag = (id: number) => {
     setSelectedTagIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  };
+
+  const toggleGroupOpen = (gid: number) => {
+    setExpandedGroups((cur) => (cur.includes(gid) ? cur.filter((x) => x !== gid) : [...cur, gid]));
+  };
+
+  const onAddPublisher = async () => {
+    const name = newPublisherName.trim();
+    if (!name) return;
+    await ensurePublisher(db, name);
+    setPublishers(await listPublishers(db));
+    setPublisher(name);
+    setNewPublisherName('');
   };
 
   const onSubmitNewTag = async () => {
@@ -246,16 +267,21 @@ export function BookForm({ bookId }: { bookId?: number }) {
     setError(null);
     setSaving(true);
     try {
+      const pubName = publisher.trim();
+      if (pubName) {
+        await ensurePublisher(db, pubName);
+      }
       const draft: BookDraft = {
         title_cn: title,
         title_jp: titleJp.trim() || null,
         author: author.trim() || null,
         illustrator: illustrator.trim() || null,
-        publisher: publisher.trim() || null,
+        publisher: pubName || null,
         total_volumes: parseOptionalNumber(totalVolumes),
+        latest_publish_date: normalizeDateText(latestPublish),
         reading_status: readingStatus,
         publication_status: publicationStatus,
-        reading_volume: parseOptionalNumber(readingVolume),
+        reading_volume: null,
         reading_method: readingMethod,
         cost: parseOptionalNumber(cost),
         recovered: parseOptionalNumber(recovered),
@@ -290,6 +316,10 @@ export function BookForm({ bookId }: { bookId?: number }) {
     }
   };
 
+  const publisherOptions = Array.from(
+    new Set([...publishers.map((p) => p.name), ...(publisher.trim() ? [publisher.trim()] : [])])
+  );
+
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.content}>
@@ -320,10 +350,39 @@ export function BookForm({ bookId }: { bookId?: number }) {
         <SectionLabel>原名（日文）</SectionLabel>
         <TextInput value={titleJp} onChangeText={setTitleJp} placeholder="原名" mode="outlined" style={styles.input} />
 
-        <SectionLabel>作者 / 插画 / 文库</SectionLabel>
+        <SectionLabel>作者 / 插画</SectionLabel>
         <TextInput value={author} onChangeText={setAuthor} placeholder="作者" mode="outlined" style={styles.input} />
         <TextInput value={illustrator} onChangeText={setIllustrator} placeholder="插画" mode="outlined" style={styles.input} />
-        <TextInput value={publisher} onChangeText={setPublisher} placeholder="文库" mode="outlined" style={styles.input} />
+
+        <SectionLabel>文库</SectionLabel>
+        <View style={styles.chipRow}>
+          <Chip selected={!publisher.trim()} onPress={() => setPublisher('')} style={styles.choiceChip}>
+            无
+          </Chip>
+          {publisherOptions.map((name) => (
+            <Chip
+              key={name}
+              selected={publisher === name}
+              onPress={() => setPublisher(publisher === name ? '' : name)}
+              style={styles.choiceChip}
+            >
+              {name}
+            </Chip>
+          ))}
+        </View>
+        <View style={styles.newTagRow}>
+          <TextInput
+            value={newPublisherName}
+            onChangeText={setNewPublisherName}
+            placeholder="新建文库…"
+            mode="outlined"
+            style={styles.newTagInput}
+            onSubmitEditing={onAddPublisher}
+          />
+          <Button mode="contained-tonal" onPress={onAddPublisher}>
+            添加
+          </Button>
+        </View>
 
         <SectionLabel>阅读状态</SectionLabel>
         <SingleChipSelect
@@ -343,7 +402,7 @@ export function BookForm({ bookId }: { bookId?: number }) {
         <SectionLabel>阅读方式</SectionLabel>
         <SingleChipSelect options={READING_METHODS} value={readingMethod} onChange={setReadingMethod} allowClear />
 
-        <SectionLabel>总卷数 / 读到第几卷（支持小数）</SectionLabel>
+        <SectionLabel>总卷数 / 最新一卷出版日期</SectionLabel>
         <View style={styles.twoCol}>
           <TextInput
             value={totalVolumes}
@@ -354,11 +413,10 @@ export function BookForm({ bookId }: { bookId?: number }) {
             style={styles.halfInput}
           />
           <TextInput
-            value={readingVolume}
-            onChangeText={setReadingVolume}
-            placeholder="读到第几卷"
+            value={latestPublish}
+            onChangeText={setLatestPublish}
+            placeholder="最新出版 YYYY.MM.DD"
             mode="outlined"
-            keyboardType="decimal-pad"
             style={styles.halfInput}
           />
         </View>
@@ -407,18 +465,88 @@ export function BookForm({ bookId }: { bookId?: number }) {
         />
 
         <SectionLabel>标签</SectionLabel>
-        <View style={styles.tagWrap}>
-          {allTags.map((t) => (
-            <Chip
-              key={t.id}
-              selected={selectedTagIds.includes(t.id)}
-              onPress={() => toggleTag(t.id)}
-              style={styles.tagChip}
-            >
-              {t.name}
-            </Chip>
-          ))}
-        </View>
+        {selectedTagIds.length ? (
+          <View style={styles.tagWrap}>
+            {allTags
+              .filter((t) => selectedTagIds.includes(t.id))
+              .map((t) => (
+                <Chip key={t.id} selected onPress={() => toggleTag(t.id)} icon="check" style={styles.tagChip}>
+                  {t.name}
+                </Chip>
+              ))}
+          </View>
+        ) : (
+          <Text style={styles.hintText}>还没有选择标签，展开下面的分组挑选</Text>
+        )}
+
+        {groups.map((g) => {
+          const gtags = allTags.filter((t) => t.group_id === g.id);
+          const open = expandedGroups.includes(g.id);
+          const picked = gtags.filter((t) => selectedTagIds.includes(t.id)).length;
+          return (
+            <View key={g.id} style={styles.tagGroup}>
+              <Pressable onPress={() => toggleGroupOpen(g.id)} style={styles.tagGroupHeader}>
+                <View style={[styles.groupDot, { backgroundColor: g.color ?? theme.colors.outline }]} />
+                <Text style={styles.tagGroupName}>{g.name}</Text>
+                <Text style={styles.tagGroupCount}>
+                  {picked}/{gtags.length}
+                </Text>
+                <IconButton icon={open ? 'chevron-up' : 'chevron-down'} size={18} style={styles.groupChevron} />
+              </Pressable>
+              {open ? (
+                <View style={styles.tagWrap}>
+                  {gtags.length ? (
+                    gtags.map((t) => (
+                      <Chip
+                        key={t.id}
+                        selected={selectedTagIds.includes(t.id)}
+                        onPress={() => toggleTag(t.id)}
+                        style={styles.tagChip}
+                      >
+                        {t.name}
+                      </Chip>
+                    ))
+                  ) : (
+                    <Text style={styles.hintText}>该分组暂无标签</Text>
+                  )}
+                </View>
+              ) : null}
+            </View>
+          );
+        })}
+
+        {(() => {
+          const ungrouped = allTags.filter((t) => t.group_id == null);
+          if (!ungrouped.length) return null;
+          const open = expandedGroups.includes(-1);
+          const picked = ungrouped.filter((t) => selectedTagIds.includes(t.id)).length;
+          return (
+            <View style={styles.tagGroup}>
+              <Pressable onPress={() => toggleGroupOpen(-1)} style={styles.tagGroupHeader}>
+                <View style={[styles.groupDot, { backgroundColor: theme.colors.outline }]} />
+                <Text style={styles.tagGroupName}>未分组</Text>
+                <Text style={styles.tagGroupCount}>
+                  {picked}/{ungrouped.length}
+                </Text>
+                <IconButton icon={open ? 'chevron-up' : 'chevron-down'} size={18} style={styles.groupChevron} />
+              </Pressable>
+              {open ? (
+                <View style={styles.tagWrap}>
+                  {ungrouped.map((t) => (
+                    <Chip
+                      key={t.id}
+                      selected={selectedTagIds.includes(t.id)}
+                      onPress={() => toggleTag(t.id)}
+                      style={styles.tagChip}
+                    >
+                      {t.name}
+                    </Chip>
+                  ))}
+                </View>
+              ) : null}
+            </View>
+          );
+        })()}
         <View style={styles.newTagRow}>
           <TextInput
             value={newTagName}
@@ -482,9 +610,20 @@ export function BookForm({ bookId }: { bookId?: number }) {
 
         {error ? <HelperText type="error">{error}</HelperText> : null}
 
-        <Button mode="contained" onPress={onSave} loading={saving} style={styles.saveBtn}>
-          {isEdit ? '保存' : '添加书籍'}
-        </Button>
+        <Pressable
+          onPress={onSave}
+          disabled={saving}
+          style={({ pressed }) => [
+            styles.saveBtn,
+            { opacity: pressed || saving ? 0.85 : 1 },
+          ]}
+        >
+          {saving ? (
+            <ActivityIndicator size="small" color={theme.colors.onPrimary} />
+          ) : (
+            <Text style={styles.saveBtnText}>{isEdit ? '保存' : '添加书籍'}</Text>
+          )}
+        </Pressable>
       </ScrollView>
 
       <Portal>
@@ -599,6 +738,43 @@ const styles = StyleSheet.create({
     marginRight: 8,
     marginBottom: 8,
   },
+  hintText: {
+    fontSize: 13,
+    color: theme.colors.onSurfaceVariant,
+    opacity: 0.8,
+    marginBottom: 8,
+  },
+  tagGroup: {
+    backgroundColor: '#1A181E',
+    borderRadius: 14,
+    marginBottom: 8,
+    overflow: 'hidden',
+  },
+  tagGroupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: 12,
+    paddingVertical: 4,
+  },
+  groupDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 8,
+  },
+  tagGroupName: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: theme.colors.onSurface,
+  },
+  tagGroupCount: {
+    fontSize: 12,
+    color: theme.colors.onSurfaceVariant,
+  },
+  groupChevron: {
+    margin: 0,
+  },
   newTagRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -630,7 +806,18 @@ const styles = StyleSheet.create({
   },
   saveBtn: {
     marginTop: 24,
+    height: 52,
     borderRadius: 999,
+    backgroundColor: theme.colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  saveBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: theme.colors.onPrimary,
+  },
+  saveBtnContent: {
     height: 52,
   },
   dialogInput: {

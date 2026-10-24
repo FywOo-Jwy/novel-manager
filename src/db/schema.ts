@@ -1,6 +1,6 @@
 import { type SQLiteDatabase } from 'expo-sqlite';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS books (
@@ -63,13 +63,38 @@ CREATE TABLE IF NOT EXISTS epub_files (
 );
 `;
 
+/**
+ * v2:
+ *  - books.latest_publish_date: 最新一卷的出版日期（用户手填，用于「最新出版」排序）
+ *  - publishers: 文库清单（与标签同样的管理逻辑，但不分组；books.publisher 仍存文本名称）
+ */
+const SCHEMA_V2 = `
+ALTER TABLE books ADD COLUMN latest_publish_date TEXT;
+
+CREATE TABLE IF NOT EXISTS publishers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE
+);
+
+INSERT OR IGNORE INTO publishers (name)
+  SELECT DISTINCT publisher FROM books
+  WHERE publisher IS NOT NULL AND TRIM(publisher) <> '';
+
+CREATE INDEX IF NOT EXISTS idx_books_latest_publish ON books(latest_publish_date);
+`;
+
 export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
   await db.execAsync('PRAGMA journal_mode = WAL;');
   await db.execAsync('PRAGMA foreign_keys = ON;');
   const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
-  const version = row?.user_version ?? 0;
+  let version = row?.user_version ?? 0;
   if (version < 1) {
     await db.execAsync(SCHEMA_V1);
     await db.execAsync('PRAGMA user_version = 1');
+    version = 1;
+  }
+  if (version < SCHEMA_VERSION) {
+    await db.execAsync(SCHEMA_V2);
+    await db.execAsync('PRAGMA user_version = 2');
   }
 }

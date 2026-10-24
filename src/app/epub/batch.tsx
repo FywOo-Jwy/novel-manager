@@ -307,9 +307,9 @@ export default function BatchEpubScreen() {
 
         <Button
           mode="contained"
-          icon="file-multiple-outline"
           onPress={onPick}
           style={styles.pickBtn}
+          contentStyle={styles.pillContent}
           disabled={busy}
         >
           {rows.length ? '继续选择文件' : '选择 epub 文件'}
@@ -318,9 +318,9 @@ export default function BatchEpubScreen() {
         {rows.length ? (
           <Button
             mode="contained"
-            icon="tray-arrow-down"
             onPress={onImport}
             style={styles.importBtn}
+            contentStyle={styles.pillContent}
             disabled={busy || selectedCount === 0}
             loading={busy}
           >
@@ -504,6 +504,11 @@ const styles = StyleSheet.create({
     marginTop: 10,
     borderRadius: 999,
     height: 50,
+  },
+  pillContent: {
+    height: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   progressBox: {
     flexDirection: 'row',

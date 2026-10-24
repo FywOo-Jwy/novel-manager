@@ -11,6 +11,7 @@ import { getBook, setBookCover } from '@/db/books';
 import {
   listEpubFiles,
   addEpubFile,
+  updateEpubFile,
   deleteEpubFile,
   setCoverSource,
 } from '@/db/epubFiles';
@@ -43,6 +44,13 @@ export default function EpubManageScreen() {
   });
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState('');
+
+  const [edit, setEdit] = useState<{ visible: boolean; id: number | null; volume: string; type: EpubType }>({
+    visible: false,
+    id: null,
+    volume: '',
+    type: '正文',
+  });
 
   const load = useCallback(async () => {
     const [b, es] = await Promise.all([getBook(db, bookId), listEpubFiles(db, bookId)]);
@@ -138,6 +146,35 @@ export default function EpubManageScreen() {
     await load();
   };
 
+  const openEdit = (e: EpubFile) => {
+    setEdit({
+      visible: true,
+      id: e.id,
+      volume: e.volume_number != null ? String(e.volume_number) : '',
+      type: e.type,
+    });
+  };
+
+  const saveEdit = async () => {
+    if (edit.id == null) return;
+    setBusy(true);
+    try {
+      const target = epubs.find((e) => e.id === edit.id);
+      if (!target) return;
+      await updateEpubFile(db, edit.id, {
+        ...target,
+        volume_number: parseOptionalNumber(edit.volume),
+        type: edit.type,
+      });
+      setEdit((s) => ({ ...s, visible: false }));
+      await load();
+    } catch {
+      setToast('保存失败：同一卷号/类型已存在');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.content}>
@@ -160,6 +197,7 @@ export default function EpubManageScreen() {
               </View>
               <View style={styles.epubActions}>
                 <IconButton icon="open-in-new" size={20} onPress={() => onOpen(e.file_path)} />
+                <IconButton icon="pencil" size={20} onPress={() => openEdit(e)} />
                 <IconButton icon="image-outline" size={20} onPress={() => onExtractCover(e)} />
                 <IconButton icon="trash-can-outline" size={20} onPress={() => onDelete(e)} />
               </View>
@@ -167,7 +205,14 @@ export default function EpubManageScreen() {
           ))
         )}
 
-        <Button mode="contained" icon="plus" onPress={onPick} style={styles.pickBtn} loading={busy}>
+        <Button
+          mode="contained"
+          icon="plus"
+          onPress={onPick}
+          style={styles.pickBtn}
+          contentStyle={styles.pickBtnContent}
+          loading={busy}
+        >
           添加 epub
         </Button>
       </ScrollView>
@@ -203,6 +248,39 @@ export default function EpubManageScreen() {
             <Button onPress={() => setAdd((s) => ({ ...s, visible: false }))}>取消</Button>
             <Button onPress={onConfirmAdd} loading={busy}>
               添加
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        <Dialog visible={edit.visible} onDismiss={() => setEdit((s) => ({ ...s, visible: false }))}>
+          <Dialog.Title>修改分卷</Dialog.Title>
+          <Dialog.Content>
+            <Text style={styles.colorLabel}>类型</Text>
+            <View style={styles.chipRow}>
+              {EPUB_TYPES.map((t) => (
+                <Chip
+                  key={t}
+                  selected={edit.type === t}
+                  onPress={() => setEdit((s) => ({ ...s, type: t }))}
+                  style={styles.typeChoice}
+                >
+                  {t}
+                </Chip>
+              ))}
+            </View>
+            <TextInput
+              value={edit.volume}
+              onChangeText={(v) => setEdit((s) => ({ ...s, volume: v }))}
+              placeholder="卷号（短篇填序号，可留空）"
+              mode="outlined"
+              keyboardType="decimal-pad"
+              style={styles.volumeInput}
+            />
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setEdit((s) => ({ ...s, visible: false }))}>取消</Button>
+            <Button onPress={saveEdit} loading={busy}>
+              保存
             </Button>
           </Dialog.Actions>
         </Dialog>
@@ -268,6 +346,8 @@ const styles = StyleSheet.create({
   pickBtn: {
     marginTop: 12,
     borderRadius: 999,
+  },
+  pickBtnContent: {
     height: 50,
   },
   fileName: {

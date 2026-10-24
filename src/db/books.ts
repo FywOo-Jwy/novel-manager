@@ -5,7 +5,7 @@ import { deleteRelFile } from '../utils/files';
 export type BookDraft = Omit<Book, 'id' | 'created_at' | 'updated_at'>;
 
 const BOOK_COLUMNS =
-  'id, title_cn, title_jp, author, illustrator, publisher, total_volumes, reading_status, publication_status, reading_volume, reading_method, cost, recovered, rating, review, cover_path, created_at, updated_at';
+  'id, title_cn, title_jp, author, illustrator, publisher, total_volumes, reading_status, publication_status, reading_volume, reading_method, cost, recovered, rating, review, cover_path, latest_publish_date, created_at, updated_at';
 
 function escapeLike(q: string): string {
   return q.replace(/[\\%_]/g, (c) => '\\' + c);
@@ -39,8 +39,8 @@ export async function createBook(db: SQLiteDatabase, draft: BookDraft): Promise<
     `INSERT INTO books
        (title_cn, title_jp, author, illustrator, publisher, total_volumes, reading_status,
         publication_status, reading_volume, reading_method, cost, recovered, rating, review,
-        cover_path, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        cover_path, latest_publish_date, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       draft.title_cn,
       draft.title_jp,
@@ -57,6 +57,7 @@ export async function createBook(db: SQLiteDatabase, draft: BookDraft): Promise<
       draft.rating,
       draft.review,
       draft.cover_path,
+      draft.latest_publish_date,
       now,
       now,
     ]
@@ -71,7 +72,7 @@ export async function updateBook(db: SQLiteDatabase, id: number, draft: BookDraf
        title_cn = ?, title_jp = ?, author = ?, illustrator = ?, publisher = ?,
        total_volumes = ?, reading_status = ?, publication_status = ?, reading_volume = ?,
        reading_method = ?, cost = ?, recovered = ?, rating = ?, review = ?,
-       cover_path = ?, updated_at = ?
+       cover_path = ?, latest_publish_date = ?, updated_at = ?
      WHERE id = ?`,
     [
       draft.title_cn,
@@ -89,6 +90,7 @@ export async function updateBook(db: SQLiteDatabase, id: number, draft: BookDraf
       draft.rating,
       draft.review,
       draft.cover_path,
+      draft.latest_publish_date,
       now,
       id,
     ]
@@ -135,10 +137,14 @@ export async function getDistinctAuthors(db: SQLiteDatabase): Promise<string[]> 
 }
 
 export async function getDistinctPublishers(db: SQLiteDatabase): Promise<string[]> {
-  const rows = await db.getAllAsync<{ publisher: string | null }>(
-    `SELECT DISTINCT publisher FROM books WHERE publisher IS NOT NULL AND publisher != '' ORDER BY publisher COLLATE NOCASE`
+  const rows = await db.getAllAsync<{ name: string }>(
+    `SELECT name FROM (
+       SELECT name FROM publishers WHERE TRIM(name) <> ''
+       UNION
+       SELECT publisher AS name FROM books WHERE publisher IS NOT NULL AND TRIM(publisher) <> ''
+     ) ORDER BY name COLLATE NOCASE`
   );
-  return rows.map((r) => r.publisher as string);
+  return rows.map((r) => r.name);
 }
 
 interface ListBooksArgs {
@@ -202,6 +208,10 @@ export async function listBooks(db: SQLiteDatabase, args: ListBooksArgs): Promis
       break;
     case 'total_volumes':
       orderBy = `(b.total_volumes IS NULL), b.total_volumes ${dir}`;
+      break;
+    case 'latest_publish_date':
+      // 按「最新一卷的出版日期」排序；没有填日期的排最后。
+      orderBy = `(b.latest_publish_date IS NULL OR b.latest_publish_date = ''), b.latest_publish_date ${dir}`;
       break;
     case 'updated_at':
     default:

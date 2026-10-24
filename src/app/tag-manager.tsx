@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { View, ScrollView, StyleSheet } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useFocusEffect } from 'expo-router';
-import { Text, Button, IconButton, Dialog, Portal, TextInput, FAB, Divider } from 'react-native-paper';
+import { Text, Button, IconButton, Dialog, Portal, TextInput, FAB, Divider, Snackbar } from 'react-native-paper';
 import { theme, TAG_COLORS } from '@/theme/theme';
 import { TagChip } from '@/components/TagChip';
 import { EmptyState } from '@/components/EmptyState';
@@ -17,7 +17,14 @@ import {
   deleteTag,
   countTagsInGroup,
 } from '@/db/tags';
-import type { TagGroup, TagWithGroup } from '@/types/models';
+import {
+  listPublishers,
+  ensurePublisher,
+  renamePublisher,
+  deletePublisher,
+  countBooksInPublisher,
+} from '@/db/publishers';
+import type { Publisher, TagGroup, TagWithGroup } from '@/types/models';
 
 interface GroupDialogState {
   visible: boolean;
@@ -31,6 +38,12 @@ interface TagDialogState {
   editingId: number | null;
   name: string;
   groupId: number | null;
+}
+
+interface PublisherDialogState {
+  visible: boolean;
+  editingId: number | null;
+  name: string;
 }
 
 export default function TagManagerScreen() {
@@ -50,11 +63,19 @@ export default function TagManagerScreen() {
     name: '',
     groupId: null,
   });
+  const [publishers, setPublishers] = useState<Publisher[]>([]);
+  const [publisherDialog, setPublisherDialog] = useState<PublisherDialogState>({
+    visible: false,
+    editingId: null,
+    name: '',
+  });
+  const [notice, setNotice] = useState('');
 
   const load = useCallback(async () => {
-    const [gs, ts] = await Promise.all([listTagGroups(db), listTags(db)]);
+    const [gs, ts, ps] = await Promise.all([listTagGroups(db), listTags(db), listPublishers(db)]);
     setGroups(gs);
     setTags(ts);
+    setPublishers(ps);
   }, [db]);
 
   useFocusEffect(
@@ -117,6 +138,36 @@ export default function TagManagerScreen() {
     await load();
   };
 
+  const openNewPublisher = () => {
+    setPublisherDialog({ visible: true, editingId: null, name: '' });
+  };
+
+  const openEditPublisher = (p: Publisher) => {
+    setPublisherDialog({ visible: true, editingId: p.id, name: p.name });
+  };
+
+  const savePublisher = async () => {
+    const name = publisherDialog.name.trim();
+    if (!name) return;
+    if (publisherDialog.editingId == null) {
+      await ensurePublisher(db, name);
+    } else {
+      await renamePublisher(db, publisherDialog.editingId, name);
+    }
+    setPublisherDialog((s) => ({ ...s, visible: false }));
+    await load();
+  };
+
+  const onDeletePublisher = async (p: Publisher) => {
+    const c = await countBooksInPublisher(db, p.name);
+    if (c > 0) {
+      setNotice(`「${p.name}」还有 ${c} 本书在用，先把它们的文库改掉再删`);
+      return;
+    }
+    await deletePublisher(db, p.id);
+    await load();
+  };
+
   const ungrouped = tags.filter((t) => t.group_id == null);
 
   return (
@@ -176,6 +227,31 @@ export default function TagManagerScreen() {
             </View>
           </View>
         ) : null}
+
+        {/* 文库：与标签同类的清单，但不分组 */}
+        <View style={styles.groupBlock}>
+          <View style={styles.groupHeader}>
+            <View style={styles.groupTitleRow}>
+              <Text style={styles.groupName}>文库</Text>
+              <Text style={styles.groupCount}>{publishers.length}</Text>
+            </View>
+            <View style={styles.groupActions}>
+              <IconButton icon="plus" size={20} onPress={openNewPublisher} />
+            </View>
+          </View>
+          <View style={styles.tagWrap}>
+            {publishers.length === 0 ? (
+              <Text style={styles.groupCount}>还没有文库，点右上角 + 添加</Text>
+            ) : null}
+            {publishers.map((p) => (
+              <View key={p.id} style={styles.tagRow}>
+                <TagChip label={p.name} />
+                <IconButton icon="pencil" size={16} onPress={() => openEditPublisher(p)} />
+                <IconButton icon="close" size={16} onPress={() => onDeletePublisher(p)} />
+              </View>
+            ))}
+          </View>
+        </View>
 
         <View style={styles.footerActions}>
           <Button mode="outlined" icon="plus" onPress={openNewGroup} style={styles.footerBtn}>
@@ -253,7 +329,30 @@ export default function TagManagerScreen() {
             <Button onPress={saveTag}>保存</Button>
           </Dialog.Actions>
         </Dialog>
+        <Dialog
+          visible={publisherDialog.visible}
+          onDismiss={() => setPublisherDialog((s) => ({ ...s, visible: false }))}
+        >
+          <Dialog.Title>{publisherDialog.editingId == null ? '新建文库' : '编辑文库'}</Dialog.Title>
+          <Dialog.Content>
+            <TextInput
+              value={publisherDialog.name}
+              onChangeText={(v) => setPublisherDialog((s) => ({ ...s, name: v }))}
+              placeholder="文库名称"
+              mode="outlined"
+              style={styles.dialogInput}
+            />
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setPublisherDialog((s) => ({ ...s, visible: false }))}>取消</Button>
+            <Button onPress={savePublisher}>保存</Button>
+          </Dialog.Actions>
+        </Dialog>
       </Portal>
+
+      <Snackbar visible={!!notice} onDismiss={() => setNotice('')} duration={3000}>
+        {notice}
+      </Snackbar>
     </View>
   );
 }
