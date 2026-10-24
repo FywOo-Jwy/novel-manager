@@ -2,15 +2,17 @@ import { useCallback, useMemo, useState } from 'react';
 import { ScrollView, View, StyleSheet, Pressable } from 'react-native';
 import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
-import { Text, IconButton, Dialog, Portal, Divider, Button } from 'react-native-paper';
+import { Text, IconButton, Dialog, Portal, Divider, Button, TextInput, Checkbox } from 'react-native-paper';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { theme } from '@/theme/theme';
 import { CoverThumb } from '@/components/CoverThumb';
 import { TagChip } from '@/components/TagChip';
-import { getBookWithTags, deleteBook } from '@/db/books';
+import { getBookWithTags, deleteBook, updateBook } from '@/db/books';
 import { listReadingLogs } from '@/db/readingLogs';
 import { listEpubFiles } from '@/db/epubFiles';
+import { getSyncUrl, setSyncUrl as saveSyncUrl } from '@/db/syncMeta';
+import { fetchNovelia, type NoveliaInfo } from '@/utils/novelia';
 import { fileFromRel } from '@/utils/files';
 import { displayDate, formatTimestamp } from '@/utils/date';
 import { formatMoney, trimNumber } from '@/utils/format';
@@ -27,6 +29,15 @@ const INFO_LABEL_COLORS = [
   '#D9A6E6',
   '#8FD9C8',
 ];
+
+/** 可以从绿站抓取的字段（绿站书籍页没有「总卷数」，故不含）。 */
+const SYNC_FIELDS = [
+  { key: 'title_jp', label: '日文原名', pick: (i: NoveliaInfo) => i.titleJp },
+  { key: 'author', label: '作者', pick: (i: NoveliaInfo) => i.author },
+  { key: 'illustrator', label: '插画', pick: (i: NoveliaInfo) => i.illustrator },
+  { key: 'publisher', label: '文库', pick: (i: NoveliaInfo) => i.publisher },
+  { key: 'latest_publish_date', label: '最新出版', pick: (i: NoveliaInfo) => i.latestPublishDate },
+] as const;
 
 /** Small outlined info pill (status / rating / method). */
 function InfoPill({ icon, label, color }: { icon?: string; label: string; color?: string }) {
@@ -124,6 +135,12 @@ export default function BookDetailScreen() {
   const [volumePicker, setVolumePicker] = useState(false);
   const [selectedEpubId, setSelectedEpubId] = useState<number | null>(null);
   const [noEpubHint, setNoEpubHint] = useState(false);
+  const [syncVisible, setSyncVisible] = useState(false);
+  const [syncUrl, setSyncUrl] = useState('');
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncError, setSyncError] = useState('');
+  const [syncInfo, setSyncInfo] = useState<NoveliaInfo | null>(null);
+  const [syncPicked, setSyncPicked] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     const [b, l, e] = await Promise.all([
@@ -213,6 +230,52 @@ export default function BookDetailScreen() {
     router.push({ pathname: '/', params: { ...p, stamp: String(Date.now()) } });
   };
 
+  /* ---------- 绿站抓取 ---------- */
+
+  const openSync = async () => {
+    setSyncError('');
+    setSyncInfo(null);
+    setSyncVisible(true);
+    const stored = await getSyncUrl(db, bookId);
+    setSyncUrl(stored ?? '');
+  };
+
+  const toggleSyncPick = (key: string) => {
+    setSyncPicked((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+  };
+
+  const onFetchSync = async () => {
+    setSyncBusy(true);
+    setSyncError('');
+    try {
+      const info = await fetchNovelia(syncUrl);
+      setSyncInfo(info);
+      setSyncVisible(false);
+      setSyncPicked(
+        SYNC_FIELDS.filter((f) => f.pick(info)).map((f) => f.key as string)
+      );
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : '抓取失败');
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
+  const onApplySync = async () => {
+    if (!syncInfo || !book) return;
+    const { id: _id, created_at: _c, updated_at: _u, tags: _t, ...rest } = book;
+    const draft = { ...rest } as typeof rest & Record<string, unknown>;
+    for (const f of SYNC_FIELDS) {
+      if (!syncPicked.includes(f.key)) continue;
+      const value = f.pick(syncInfo);
+      if (value) draft[f.key] = value;
+    }
+    await updateBook(db, bookId, draft as never);
+    await saveSyncUrl(db, bookId, syncInfo.sourceUrl);
+    setSyncInfo(null);
+    await load();
+  };
+
   if (!book) return <View style={styles.container} />;
 
   const infoValues = (v: string | number | null | undefined) =>
@@ -224,6 +287,12 @@ export default function BookDetailScreen() {
       <View style={[styles.topBar, { paddingTop: insets.top }]}>
         <IconButton icon="arrow-left" size={24} onPress={() => router.back()} iconColor={theme.colors.onSurface} />
         <View style={styles.topBarRight}>
+          <IconButton
+            icon="cloud-download-outline"
+            size={22}
+            onPress={openSync}
+            iconColor={theme.colors.onSurface}
+          />
           <IconButton
             icon="pencil-outline"
             size={22}
@@ -511,6 +580,80 @@ export default function BookDetailScreen() {
             </Button>
           </Dialog.Actions>
         </Dialog>
+
+        {/* 绿站抓取：输入链接 */}
+        <Dialog visible={syncVisible} onDismiss={() => setSyncVisible(false)}>
+          <Dialog.Title>从绿站获取信息</Dialog.Title>
+          <Dialog.Content>
+            <Text style={styles.dialogText}>
+              粘贴这本书在绿站的页面链接（n.novelia.cc/wenku/…），会自动读取日文原名、作者、插画、文库与最新出版日期。
+            </Text>
+            <TextInput
+              mode="outlined"
+              value={syncUrl}
+              onChangeText={setSyncUrl}
+              placeholder="https://n.novelia.cc/wenku/…"
+              autoCapitalize="none"
+              autoCorrect={false}
+              dense
+              style={styles.urlInput}
+            />
+            {syncError ? <Text style={styles.syncError}>{syncError}</Text> : null}
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setSyncVisible(false)}>取消</Button>
+            <Button
+              onPress={onFetchSync}
+              loading={syncBusy}
+              disabled={syncBusy || !syncUrl.trim()}
+            >
+              抓取
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        {/* 绿站抓取：结果预览 */}
+        <Dialog visible={!!syncInfo} onDismiss={() => setSyncInfo(null)}>
+          <Dialog.Title>抓取结果</Dialog.Title>
+          <Dialog.Content>
+            <ScrollView style={styles.syncList} showsVerticalScrollIndicator={false}>
+              {SYNC_FIELDS.map((f) => {
+                const next = syncInfo ? f.pick(syncInfo) : null;
+                const current = syncInfo
+                  ? ((book as unknown as Record<string, string | null>)[f.key] ?? null)
+                  : null;
+                const checked = syncPicked.includes(f.key);
+                return (
+                  <Pressable
+                    key={f.key}
+                    style={styles.syncRow}
+                    onPress={() => next && toggleSyncPick(f.key)}
+                    disabled={!next}
+                  >
+                    <Checkbox status={checked && next ? 'checked' : 'unchecked'} />
+                    <View style={styles.syncTextWrap}>
+                      <Text style={styles.syncLabel}>{f.label}</Text>
+                      <Text style={styles.syncValue} numberOfLines={2}>
+                        {next ?? '（页面没有这一项）'}
+                      </Text>
+                      {next && current && current !== next ? (
+                        <Text style={styles.syncOld} numberOfLines={1}>
+                          旧：{current}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setSyncInfo(null)}>取消</Button>
+            <Button onPress={onApplySync} disabled={!syncPicked.length}>
+              应用选中
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
       </Portal>
     </View>
   );
@@ -751,5 +894,41 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     color: theme.colors.onSurface,
     fontSize: 14,
+  },
+  urlInput: {
+    marginTop: 12,
+    backgroundColor: '#1A181E',
+  },
+  syncError: {
+    marginTop: 8,
+    fontSize: 12.5,
+    color: theme.colors.error,
+  },
+  syncList: {
+    maxHeight: 320,
+  },
+  syncRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  syncTextWrap: {
+    flex: 1,
+    marginLeft: 4,
+  },
+  syncLabel: {
+    fontSize: 12,
+    color: theme.colors.onSurfaceVariant,
+  },
+  syncValue: {
+    fontSize: 14,
+    color: theme.colors.onSurface,
+    marginTop: 2,
+  },
+  syncOld: {
+    fontSize: 11.5,
+    color: theme.colors.onSurfaceVariant,
+    marginTop: 2,
+    opacity: 0.7,
   },
 });

@@ -1,6 +1,6 @@
 import { type SQLiteDatabase } from 'expo-sqlite';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS books (
@@ -83,6 +83,18 @@ INSERT OR IGNORE INTO publishers (name)
 CREATE INDEX IF NOT EXISTS idx_books_latest_publish ON books(latest_publish_date);
 `;
 
+/**
+ * v3:
+ *  - sync_meta: 记住每本书的抓取来源链接（不属于备份内容，导出导入格式保持不变）
+ */
+const SCHEMA_V3 = `
+CREATE TABLE IF NOT EXISTS sync_meta (
+  book_id INTEGER PRIMARY KEY REFERENCES books(id) ON DELETE CASCADE,
+  url TEXT NOT NULL,
+  synced_at TEXT NOT NULL
+);
+`;
+
 export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
   await db.execAsync('PRAGMA journal_mode = WAL;');
   await db.execAsync('PRAGMA foreign_keys = ON;');
@@ -93,8 +105,14 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
     await db.execAsync('PRAGMA user_version = 1');
     version = 1;
   }
-  if (version < SCHEMA_VERSION) {
+  if (version < 2) {
     await db.execAsync(SCHEMA_V2);
     await db.execAsync('PRAGMA user_version = 2');
+    version = 2;
+  }
+  if (version < 3) {
+    await db.execAsync(SCHEMA_V3);
+    await db.execAsync('PRAGMA user_version = 3');
+    version = 3;
   }
 }
